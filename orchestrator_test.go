@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apoydence/onpar"
-	. "github.com/apoydence/onpar/expect"
-	. "github.com/apoydence/onpar/matchers"
-	orchestrator "github.com/cloudfoundry-incubator/go-orchestrator"
+	orchestrator "github.com/poy/go-orchestrator"
+	"github.com/poy/onpar"
+	. "github.com/poy/onpar/expect"
+	. "github.com/poy/onpar/matchers"
 )
 
 type TO struct {
@@ -152,6 +152,16 @@ func TestOrchestrator(t *testing.T) {
 				Expect(t, t.spy.removed["worker-1"]).To(HaveLen(1))
 			})
 
+			o.Spec("removing fails", func(t TO) {
+				t.spy.removeErr = errors.New("some-error")
+				t.spy.actual["worker-0"] = []interface{}{"multi-task-0", "multi-task-1"}
+				t.spy.actual["worker-1"] = []interface{}{"multi-task-0", "multi-task-1"}
+				t.o.AddTask("multi-task-0", orchestrator.WithTaskInstances(2))
+				err := t.o.NextTerm(context.Background())
+
+				Expect(t, err).To(Not(BeNil()))
+			})
+
 			o.Spec("it removes any extra tasks", func(t TO) {
 				t.spy.actual["worker-0"] = []interface{}{"multi-task"}
 				t.spy.actual["worker-1"] = []interface{}{"multi-task"}
@@ -163,14 +173,30 @@ func TestOrchestrator(t *testing.T) {
 			})
 
 			o.Group("with single worker", func() {
-				o.Spec("it only assigns the task once", func(t TO) {
+				o.BeforeEach(func(t TO) TO {
 					t.o.UpdateWorkers([]interface{}{"worker"})
+					return t
+				})
+
+				o.Spec("it only assigns the task once", func(t TO) {
+
+					err := t.o.NextTerm(context.Background())
+
 					t.spy.actual["worker"] = []interface{}{"multi-task"}
 					t.o.AddTask("multi-task", orchestrator.WithTaskInstances(2))
 
-					t.o.NextTerm(context.Background())
-
+					Expect(t, err).To(BeNil())
 					Expect(t, t.spy.added["worker"]).To(HaveLen(0))
+				})
+
+				o.Spec("adding fails", func(t TO) {
+					t.spy.addErr = errors.New("some-error")
+
+					t.o.AddTask("multi-task", orchestrator.WithTaskInstances(2))
+
+					err := t.o.NextTerm(context.Background())
+
+					Expect(t, err).To(Not(BeNil()))
 				})
 			})
 
@@ -503,6 +529,9 @@ func TestOrchestrator(t *testing.T) {
 type spyCommunicator struct {
 	mu sync.Mutex
 
+	addErr    error
+	removeErr error
+
 	block      map[interface{}]bool
 	listErrs   map[interface{}]error
 	actual     map[interface{}][]interface{}
@@ -545,7 +574,7 @@ func (s *spyCommunicator) Add(ctx context.Context, worker interface{}, task inte
 
 	s.added[worker] = append(s.added[worker], task)
 	s.addedCtx[worker] = append(s.addedCtx[worker], ctx)
-	return nil
+	return s.addErr
 }
 
 func (s *spyCommunicator) Remove(ctx context.Context, worker interface{}, task interface{}) error {
@@ -554,7 +583,7 @@ func (s *spyCommunicator) Remove(ctx context.Context, worker interface{}, task i
 
 	s.removed[worker] = append(s.removed[worker], task)
 	s.removedCtx[worker] = append(s.removedCtx[worker], ctx)
-	return nil
+	return s.removeErr
 }
 
 func count(x interface{}, y []interface{}) int {

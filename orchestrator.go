@@ -121,7 +121,7 @@ type Communicator interface {
 // NextTerm reaches out to the cluster to gather to actual workload. It then
 // attempts to fix the delta between actual and expected. The lifecycle of
 // the term is managed by the given context.
-func (o *Orchestrator) NextTerm(ctx context.Context) {
+func (o *Orchestrator) NextTerm(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -138,28 +138,37 @@ func (o *Orchestrator) NextTerm(ctx context.Context) {
 		for _, task := range tasks {
 			// Remove the task from the workers.
 			removeCtx, _ := context.WithTimeout(ctx, o.timeout)
-			o.c.Remove(removeCtx, worker, task)
+			if err := o.c.Remove(removeCtx, worker, task); err != nil {
+				return err
+			}
 		}
 	}
 
 	for task, missing := range toAdd {
 		history := make(map[interface{}]bool)
 		for i := 0; i < missing; i++ {
-			counts = o.assignTask(ctx,
+			var err error
+			counts, err = o.assignTask(ctx,
 				task,
 				counts,
 				actual,
 				history,
 			)
+
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	o.s(TermStats{
 		WorkerCount: len(actual),
 	})
+
+	return nil
 }
 
-// rebalance will rebalance tasks across the workers. If any worker has too
+// Rebalance will rebalance tasks across the workers. If any worker has too
 // many tasks, it will be added to the remove map, and added to the returned
 // add slice.
 func (o *Orchestrator) Rebalance(
@@ -207,7 +216,7 @@ func (o *Orchestrator) assignTask(
 	counts []countInfo,
 	actual map[interface{}][]interface{},
 	history map[interface{}]bool,
-) []countInfo {
+) ([]countInfo, error) {
 
 	for i, info := range counts {
 		// Ensure that each worker gets an even amount of work assigned.
@@ -240,7 +249,9 @@ func (o *Orchestrator) assignTask(
 		// Assign the task to the worker.
 		o.log.Printf("Adding task %s to %s.", task, info.name)
 		addCtx, _ := context.WithTimeout(ctx, o.timeout)
-		o.c.Add(addCtx, info.name, task)
+		if err := o.c.Add(addCtx, info.name, task); err != nil {
+			return nil, err
+		}
 
 		// Move adjusted count to end of slice to help with fairness
 		c := counts[i]
@@ -249,7 +260,7 @@ func (o *Orchestrator) assignTask(
 		break
 	}
 
-	return counts
+	return counts, nil
 }
 
 // totalTaskCount calculates the total number of expected task instances.
@@ -261,7 +272,7 @@ func (o *Orchestrator) totalTaskCount() int {
 	return total
 }
 
-// countInfo stores information used to assign tasks to workers.
+// CountInfo stores information used to assign tasks to workers.
 type countInfo struct {
 	name  interface{}
 	count int
